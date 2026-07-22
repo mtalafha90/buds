@@ -33,8 +33,10 @@ public sealed class SppFrameParser
                 continue;
             }
 
-            // Not enough bytes yet to know - wait for more data.
-            if (span.Length < 3 || span.Length < 3 + span[2] + 3)
+            // Not enough bytes yet to know - wait for more data. Header is SOF+Type+Length (3
+            // bytes) before the Length byte itself is even readable; once readable, the frame's
+            // total size is Length (MsgId+Payload+CRC) + 4 (SOF+Type+Length+EOF).
+            if (span.Length < 3 || span.Length < span[2] + 4)
             {
                 return;
             }

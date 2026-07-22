@@ -4,27 +4,34 @@ A cross-platform desktop app for controlling Samsung Galaxy Buds and Apple AirPo
 (and Windows) - battery status, active noise cancellation, ambient/transparency mode, and so on -
 outside of each earbuds' own phone app.
 
-## Status: architectural scaffold, not yet verified against real hardware
+## Status: real hardware testing in progress
 
-This project was built without access to real Galaxy Buds, real AirPods, or a Bluetooth adapter in
-the build environment, so **nothing here has been tested against actual earbuds**. What you're
-getting:
+This project was originally built without access to real Galaxy Buds, real AirPods, or a Bluetooth
+adapter at all - it's since been tried against a real, physically paired Samsung Galaxy Buds Core
+on a real Ubuntu machine, which is how the issues below were actually found and fixed (rather than
+guessed at). Apple/AirPods control is still completely unverified - no AirPods have been tested
+against this yet.
 
-- A complete, compiling, cross-platform architecture: connection management, a UI, and both a
-  Linux and a Windows transport layer, built and verified to compile clean on both target
-  frameworks in this repository.
-- A structurally faithful implementation of each protocol's framing (how bytes are packaged,
-  checksummed and parsed).
-- **Unverified exact protocol byte values.** Samsung's Galaxy Buds SPP protocol and Apple's AAP
-  protocol for AirPods are both proprietary and undocumented by their vendors - everything known
-  about them publicly comes from community reverse-engineering. This sandbox could not reach a
-  live packet capture or a guaranteed-accurate copy of the reference open-source implementations,
-  so the exact command/message ID bytes in `SamsungMessageId.cs` and `AapCommands.cs` /
-  `AapConstants.cs` are placeholders sourced from general public write-ups, clearly flagged in
-  those files' doc comments. **Treat them as a starting point to verify, not as known-correct.**
+- The architecture (connection management, UI, both transport layers) compiles clean on both
+  target frameworks and has been confirmed to work end-to-end on real hardware for Samsung: device
+  discovery via `bluetoothctl`, and a real RFCOMM socket connect over `AF_BLUETOOTH`, both
+  succeeded against a real paired Galaxy Buds Core.
+- The Samsung SPP frame format and message IDs were rewritten after fetching the actual current
+  source of the reference client
+  ([ThePBone/GalaxyBudsClient](https://github.com/ThePBone/GalaxyBudsClient),
+  `GalaxyBudsClient/Message/SppMessageEnums.cs` and its `*Decoder.cs` classes) rather than guessed
+  - this caught and fixed a real bug (the original frame format was missing a Request/Response
+    type byte, and misread what the length field measured). Message IDs like `StatusUpdated`,
+  `NoiseControls` and `SetAmbientMode` in `SamsungMessageId.cs` are now sourced from that real
+  enum, not placeholders. What's still genuinely unverified: the exact numeric mapping for
+  `NoiseControlModes` (Off/ANC/Ambient), and whether your specific model uses the 3-way
+  `NoiseControls` selector or the simpler boolean `SetAmbientMode` toggle - see that file's doc
+  comment.
+- **Apple's AAP protocol for AirPods is still entirely unverified placeholder bytes**, sourced from
+  general public write-ups rather than fetched reference source, clearly flagged in
+  `AapConstants.cs` / `AapCommands.cs`. Nobody has tried this against real AirPods yet.
 
-See "Verifying and fixing the protocol constants" below for exactly how to close that gap on your
-own machine, with your own earbuds.
+See "Verifying and fixing the protocol constants" below for how to close the remaining gaps.
 
 ## Architecture
 
@@ -114,9 +121,12 @@ options, in order of effort:
 
 ## Known gaps / good next steps
 
-- Samsung: only the "legacy" (1-byte length) SPP frame variant is implemented. Newer Buds
-  (Live/Pro/2/2 Pro) reportedly use an "extended" 2-byte-length variant for larger payloads -
-  extend `SppFrameCodec` if you hit that.
+- Samsung: only the "legacy" (0xFE/0xEE, 1-byte length field) SPP frame variant is implemented.
+  The reference source shows newer buds use different framing (0xFD/0xDD, and a fragmented
+  0xFC/0xCC variant for large transfers like firmware) - extend `SppFrameCodec` if you hit that.
+- Samsung: the `NoiseControlModes` numeric mapping and the exact `ExtendedStatusUpdated` battery
+  byte layout weren't confirmed against source (only `StatusUpdated` was) - if noise control or
+  battery still looks wrong after the frame-format fix, these are the next things to check.
 - Samsung RFCOMM channel discovery is a brute-force scan, not real SDP (see above).
 - No packaging/installer work has been done (e.g. a `.deb`, a Windows MSIX/installer) - `dotnet
   publish` output is what you get today.

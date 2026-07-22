@@ -1,23 +1,27 @@
 namespace BudsControl.Protocols.Samsung;
 
 /// <summary>
-/// Encodes/decodes the "legacy" (non-extended) Galaxy Buds SPP frame:
-///   SOF(1)=0xFE | MsgId(1) | Length(1, payload length only) | Payload(n) | CRC16-CCITT(2, big-endian, over MsgId+Payload) | EOF(1)=0xEE
+/// Encodes/decodes the "legacy" Galaxy Buds SPP frame:
+///   SOF(1)=0xFE | Type(1: Request=0/Response=1) | Length(1) | MsgId(1) | Payload(n) | CRC16-CCITT(2, big-endian, over MsgId+Payload) | EOF(1)=0xEE
 ///
-/// This only supports payloads up to 255 bytes. Newer buds (Live/Pro/2/2 Pro) reportedly use an
-/// "extended" frame variant with a 2-byte length field for larger payloads - that variant is not
-/// implemented here; see the README for how to extend this codec if you need it.
+/// The Length byte is the size of MsgId+Payload+CRC combined (n+3), NOT the payload alone - this
+/// was a real bug in an earlier version of this file (it also omitted the Type byte entirely),
+/// found and fixed after fetching the actual protocol notes and reference decoder source rather
+/// than continuing to guess. This only supports payloads that keep MsgId+Payload+CRC under 255
+/// bytes total; newer buds reportedly use a different framing (0xFD/0xDD SOF/EOF) with a 2-byte
+/// length for larger payloads - not implemented here.
 /// </summary>
 public static class SppFrameCodec
 {
     public const byte StartOfFrame = 0xFE;
     public const byte EndOfFrame = 0xEE;
 
-    public static byte[] Encode(SamsungMessageId messageId, ReadOnlySpan<byte> payload)
+    public static byte[] Encode(SppMsgType type, SamsungMessageId messageId, ReadOnlySpan<byte> payload)
     {
-        if (payload.Length > 255)
+        int innerLength = 1 + payload.Length + 2; // MsgId + Payload + CRC
+        if (innerLength > 255)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "Legacy SPP frames support at most 255 payload bytes; use the extended frame variant instead.");
+            throw new ArgumentOutOfRangeException(nameof(payload), "Legacy SPP frames support at most 252 payload bytes.");
         }
 
         Span<byte> forCrc = stackalloc byte[1 + payload.Length];
@@ -25,11 +29,12 @@ public static class SppFrameCodec
         payload.CopyTo(forCrc[1..]);
         ushort crc = Crc16Ccitt.Compute(forCrc);
 
-        byte[] frame = new byte[1 + 1 + 1 + payload.Length + 2 + 1];
+        byte[] frame = new byte[1 + 1 + 1 + 1 + payload.Length + 2 + 1];
         int i = 0;
         frame[i++] = StartOfFrame;
+        frame[i++] = (byte)type;
+        frame[i++] = (byte)innerLength;
         frame[i++] = (byte)messageId;
-        frame[i++] = (byte)payload.Length;
         payload.CopyTo(frame.AsSpan(i));
         i += payload.Length;
         frame[i++] = (byte)(crc >> 8);
@@ -38,19 +43,24 @@ public static class SppFrameCodec
         return frame;
     }
 
-    /// <summary>Attempts to decode a single complete frame starting exactly at offset 0 of <paramref name="span"/>. Returns null (and no bytes consumed) if the span is too short to tell yet, or the frame is malformed.</summary>
+    /// <summary>Attempts to decode a single complete frame starting exactly at offset 0 of <paramref name="span"/>. Returns false (and no bytes consumed) if the span is too short to tell yet, or the frame is malformed.</summary>
     internal static bool TryDecode(ReadOnlySpan<byte> span, out SppFrame? frame, out int consumed)
     {
         frame = null;
         consumed = 0;
 
-        if (span.Length < 3 || span[0] != StartOfFrame)
+        if (span.Length < 4 || span[0] != StartOfFrame)
         {
             return false;
         }
 
-        byte payloadLength = span[2];
-        int totalLength = 1 + 1 + 1 + payloadLength + 2 + 1;
+        byte innerLength = span[2]; // MsgId + Payload + CRC
+        if (innerLength < 3)
+        {
+            return false;
+        }
+
+        int totalLength = innerLength + 4; // SOF + Type + Length + innerLength + EOF
         if (span.Length < totalLength)
         {
             return false;
@@ -61,21 +71,23 @@ public static class SppFrameCodec
             return false;
         }
 
-        var messageId = (SamsungMessageId)span[1];
-        ReadOnlySpan<byte> payload = span.Slice(3, payloadLength);
+        var type = (SppMsgType)span[1];
+        var messageId = (SamsungMessageId)span[3];
+        int payloadLength = innerLength - 3;
+        ReadOnlySpan<byte> payload = span.Slice(4, payloadLength);
 
         Span<byte> forCrc = stackalloc byte[1 + payloadLength];
-        forCrc[0] = span[1];
+        forCrc[0] = span[3];
         payload.CopyTo(forCrc[1..]);
         ushort expectedCrc = Crc16Ccitt.Compute(forCrc);
-        ushort actualCrc = (ushort)((span[3 + payloadLength] << 8) | span[3 + payloadLength + 1]);
+        ushort actualCrc = (ushort)((span[4 + payloadLength] << 8) | span[4 + payloadLength + 1]);
 
         if (expectedCrc != actualCrc)
         {
             return false;
         }
 
-        frame = new SppFrame(messageId, payload.ToArray());
+        frame = new SppFrame(type, messageId, payload.ToArray());
         consumed = totalLength;
         return true;
     }
