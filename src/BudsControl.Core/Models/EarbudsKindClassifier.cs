@@ -3,7 +3,12 @@ namespace BudsControl.Core.Models;
 /// <summary>
 /// Best-effort classification of a paired device by its advertised Bluetooth name.
 /// This is a heuristic, not a protocol-level identification - a device could rename
-/// itself and fool it. It only decides which control protocol to *try*.
+/// itself and fool it. It only decides which control protocol to *try*, so a false
+/// positive is harmless (the device just fails to connect/handshake) - that's why this
+/// matches loosely on "buds" rather than requiring the "Galaxy" prefix. Samsung drops
+/// "Galaxy" from the advertised Bluetooth name on some models (e.g. "Galaxy Buds Core"
+/// advertises as "Buds Core", optionally with an owner's-name possessive prefix like
+/// "Mohammed's Buds Core").
 /// </summary>
 public static class EarbudsKindClassifier
 {
@@ -14,7 +19,7 @@ public static class EarbudsKindClassifier
             return EarbudsKind.Unknown;
         }
 
-        if (deviceName.Contains("Galaxy Buds", StringComparison.OrdinalIgnoreCase))
+        if (deviceName.Contains("buds", StringComparison.OrdinalIgnoreCase))
         {
             return EarbudsKind.SamsungGalaxyBuds;
         }
